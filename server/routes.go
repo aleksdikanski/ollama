@@ -1216,6 +1216,19 @@ func allowedHostsMiddleware(addr net.Addr) gin.HandlerFunc {
 	}
 }
 
+func apiKeyHandler() gin.HandlerFunc {
+	return func (c *gin.Context) {
+		send := c.GetHeader("X-API-KEY")
+		configured := os.Getenv("API_KEY")
+
+		if send != configured {
+			c.AbortWithStatus(http.StatusForbidden)
+		}
+
+		c.Next()
+	}
+}
+
 func (s *Server) GenerateRoutes(rc *ollama.Registry) (http.Handler, error) {
 	corsConfig := cors.DefaultConfig()
 	corsConfig.AllowWildcard = true
@@ -1254,36 +1267,40 @@ func (s *Server) GenerateRoutes(rc *ollama.Registry) (http.Handler, error) {
 	// General
 	r.HEAD("/", func(c *gin.Context) { c.String(http.StatusOK, "Ollama is running") })
 	r.GET("/", func(c *gin.Context) { c.String(http.StatusOK, "Ollama is running") })
-	r.HEAD("/api/version", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"version": version.Version}) })
-	r.GET("/api/version", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"version": version.Version}) })
+
+	r.POST("/api/show", s.ShowHandler)
+
+	api := r.Group("/api", apiKeyHandler())
+	api.HEAD("/version", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"version": version.Version}) })
+	api.GET("/version", func(c *gin.Context) { c.JSON(http.StatusOK, gin.H{"version": version.Version}) })
 
 	// Local model cache management (new implementation is at end of function)
-	r.POST("/api/pull", s.PullHandler)
-	r.POST("/api/push", s.PushHandler)
-	r.HEAD("/api/tags", s.ListHandler)
-	r.GET("/api/tags", s.ListHandler)
-	r.POST("/api/show", s.ShowHandler)
-	r.DELETE("/api/delete", s.DeleteHandler)
+	api.POST("/pull", s.PullHandler)
+	api.POST("/push", s.PushHandler)
+	api.HEAD("/tags", s.ListHandler)
+	api.GET("/tags", s.ListHandler)
+	api.DELETE("/delete", s.DeleteHandler)
 
 	// Create
-	r.POST("/api/create", s.CreateHandler)
-	r.POST("/api/blobs/:digest", s.CreateBlobHandler)
-	r.HEAD("/api/blobs/:digest", s.HeadBlobHandler)
-	r.POST("/api/copy", s.CopyHandler)
+	api.POST("/create", s.CreateHandler)
+	api.POST("/blobs/:digest", s.CreateBlobHandler)
+	api.HEAD("/blobs/:digest", s.HeadBlobHandler)
+	api.POST("/copy", s.CopyHandler)
 
 	// Inference
-	r.GET("/api/ps", s.PsHandler)
-	r.POST("/api/generate", s.GenerateHandler)
-	r.POST("/api/chat", s.ChatHandler)
-	r.POST("/api/embed", s.EmbedHandler)
-	r.POST("/api/embeddings", s.EmbeddingsHandler)
+	api.GET("/ps", s.PsHandler)
+	api.POST("/generate", s.GenerateHandler)
+	api.POST("/chat", s.ChatHandler)
+	api.POST("/embed", s.EmbedHandler)
+	api.POST("/embeddings", s.EmbeddingsHandler)
 
+	v1 := r.Group("/v1", apiKeyHandler())
 	// Inference (OpenAI compatibility)
-	r.POST("/v1/chat/completions", openai.ChatMiddleware(), s.ChatHandler)
-	r.POST("/v1/completions", openai.CompletionsMiddleware(), s.GenerateHandler)
-	r.POST("/v1/embeddings", openai.EmbeddingsMiddleware(), s.EmbedHandler)
-	r.GET("/v1/models", openai.ListMiddleware(), s.ListHandler)
-	r.GET("/v1/models/:model", openai.RetrieveMiddleware(), s.ShowHandler)
+	v1.POST("/chat/completions", openai.ChatMiddleware(), s.ChatHandler)
+	v1.POST("/completions", openai.CompletionsMiddleware(), s.GenerateHandler)
+	v1.POST("/embeddings", openai.EmbeddingsMiddleware(), s.EmbedHandler)
+	v1.GET("/models", openai.ListMiddleware(), s.ListHandler)
+	v1.GET("/models/:model", openai.RetrieveMiddleware(), s.ShowHandler)
 
 	if rc != nil {
 		// wrap old with new
